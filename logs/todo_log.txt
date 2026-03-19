@@ -1,0 +1,13 @@
+[2026-03-19 11:39:50] user=홍길자 | action=CREATE | title=러닝
+[2026-03-19 11:39:56] user=홍길자 | action=CREATE | title=라이딩
+[2026-03-19 11:40:02] user=홍길자 | action=CREATE | title=프라잉
+[2026-03-19 12:52:21] user=홍길자 | action=UPDATE | title=러닝
+[2026-03-19 12:52:22] user=홍길자 | action=UPDATE | title=러닝
+[2026-03-19 12:52:32] user=홍길자 | action=UPDATE | title=러닝
+[2026-03-19 12:52:34] user=홍길자 | action=UPDATE | title=러닝
+[2026-03-19 12:52:38] user=홍길자 | action=DELETE | title=프라잉
+[2026-03-19 12:56:47] user=홍길자 | action=UPDATE | title=string
+[2026-03-19 12:58:37] user=홍길자 | action=CREATE | title=세일링
+[2026-03-19 12:58:44] user=홍길자 | action=DELETE | title=string
+[2026-03-19 12:58:57] user=홍길자 | action=CREATE | title=라이딩
+[2026-03-19 12:59:28] user=홍길자 | action=UPDATE | title=달리기

@@ -1,66 +1,67 @@
-from fastapi import APIRouter, HTTPException, status, Query, Depends
+from fastapi import APIRouter, HTTPException, status, Query, Depends, BackgroundTasks
 from typing import Optional
 from fastapi import Header, Cookie, Response
 from sqlalchemy.orm import Session
+import asyncio  # [추가] async / await 연습용
 # from app.models.item import Todo, TodoCreate, TodoUpdate
 from app.schemas.todo import Todo, TodoCreate, TodoUpdate
 from app.models.todo import TodoDB
-from app.database import get_db
+from app.models.user import UserDB
+
+# from app.database import get_db
+# ✅ 변경: get_db import 위치 변경
+from app.db.session import get_db
+from app.routes.user import get_current_user
+
+from app.tasks.todo_tasks import write_todo_log, fake_send_notification
 
 
-router = APIRouter()
+
+router = APIRouter(prefix="/todos", tags=["Todos"])
 
 # todos = []
 # next_id = 1
 
-@router.get("/todos", response_model=list[Todo],
-    status_code = status.HTTP_200_OK,
-    responses={
-        200: {"description": "전체 Todo 목록 조회 성공"},
-        400: {"description": "잘못된 정렬 값 요청"}
-    }
+# [추가] async / await 연습용 비동기 API
+# - DB 작업이 아니라 "비동기 대기" 흐름을 보기 위한 예제입니다.
+# - await asyncio.sleep() 는 "기다리는 동안 다른 작업 가능" 상태를 의미합니다.
+# =========================================================
+@router.get("/async-preview")
+async def async_preview():
+    await asyncio.sleep(2)  # [추가] 비동기 대기
+    return {"message": "2초 비동기 대기 후 응답이 완료되었습니다."}
 
+
+# =========================================================
+# 내 Todo 목록 조회
+# - 로그인한 사용자의 Todo만 조회
+# =========================================================
+@router.get(
+    "",
+    response_model=list[Todo],
+    status_code=status.HTTP_200_OK
 )
 def get_todos(
-    keyword: Optional[str] = Query(
-        None,
-        min_length=1,
-        max_length=100,
-        description="제목에서 검색할 키워드"
-    ),  
-    done: Optional[bool] = Query(
-        None,
-        description="완료 여부로 필터링 (true/false)"
-    ),  
-    sort: Optional[str] = Query(   
-		None,  
-		description="정렬 방식 (asc 또는 desc)"  
-	),
-    db: Session = Depends(get_db)   # ✅ 추가: DB 세션 주입
+    keyword: Optional[str] = Query(None, min_length=1, max_length=100, description="제목 검색"),
+    done: Optional[bool] = Query(None, description="완료 여부"),
+    sort: Optional[str] = Query(None, description="asc 또는 desc"),
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    # ✅ 추가: DB 쿼리 시작
-    query = db.query(TodoDB)
+    query = db.query(TodoDB).filter(TodoDB.user_id == current_user.id)
 
-
-
-    # ✅ keyword가  검색
     if keyword is not None:
         query = query.filter(TodoDB.title.ilike(f"%{keyword}%"))
 
-    # ✅ done  필터링
     if done is not None:
-        result = [todo for todo in result if todo.done == done]
-    
-    # ✅ 추가: 예외 처리 - 잘못된 정렬 값 검사
+        query = query.filter(TodoDB.done == done)
+
     if sort is not None and sort not in ["asc", "desc"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="sort 값은 asc 또는 desc만 사용할 수 있습니다."
         )
 
-
-    
-    # 정렬
     if sort == "asc":
         query = query.order_by(TodoDB.id.asc())
     elif sort == "desc":
@@ -68,138 +69,193 @@ def get_todos(
     else:
         query = query.order_by(TodoDB.id.asc())
 
-    # ✅ 추가: DB에서 결과 조회
-    todos = query.all()    
-    return todos
+    return query.all()
 
 
-@router.get("/todos/{todo_id}", response_model=Todo,
-    status_code=status.HTTP_200_OK,  # ✅ 추가: 상태 코드 명시
-    responses={                      # ✅ 추가: Swagger에 예외 응답 문서화
-        200: {"description": "Todo 상세 조회 성공"},
-        404: {"description": "해당 Todo를 찾을 수 없음"}
-    }
-
-)
-
-def get_todo(todo_id: int, db: Session = Depends(get_db)):   # ✅ 추가
-    # ✅ 추가: DB에서 1개 조회
-    todo = db.query(TodoDB).filter(TodoDB.id == todo_id).first()
+# =========================================================
+# 내 Todo 상세 조회
+# =========================================================
+@router.get("/{todo_id}", response_model=Todo)
+def get_todo(
+    todo_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    todo = (
+        db.query(TodoDB)
+        .filter(TodoDB.id == todo_id, TodoDB.user_id == current_user.id)
+        .first()
+    )
 
     if not todo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="해당 할 일이 없습니다."
-        )
+        raise HTTPException(status_code=404, detail="해당 할 일이 없습니다.")
 
     return todo
 
 
-
-@router.post("/todos", response_model=Todo,
-    status_code=status.HTTP_201_CREATED,
-    responses={                      # ✅ 추가: Swagger에 예외 응답 문서화
-        201: {"description": "Todo 생성 성공"},
-        400: {"description": "중복된 제목 또는 잘못된 요청"}
-    }
-)
-def create_todo(todo_data: TodoCreate, db: Session = Depends(get_db)):   # ✅ 추가
-    # ✅ 추가: 중복 제목 확인
-    existing_todo = db.query(TodoDB).filter(TodoDB.title == todo_data.title).first()
-    if existing_todo:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="같은 제목의 할 일은 이미 존재합니다."
+# =========================================================
+# 내 Todo 생성
+# - [추가] BackgroundTasks 사용
+# - 응답 후 로그 저장, 알림 기록 작업을 뒤에서 실행
+# =========================================================
+@router.post("", response_model=Todo, status_code=201)
+def create_todo(
+    todo_data: TodoCreate,
+    background_tasks: BackgroundTasks,  # [추가] 백그라운드 작업 객체
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    existing_todo = (
+        db.query(TodoDB)
+        .filter(
+            TodoDB.title == todo_data.title,
+            TodoDB.user_id == current_user.id
         )
-
-    # ✅ 추가: DB 객체 생성
-    new_todo = TodoDB(
-        title=todo_data.title,
-        done=todo_data.done
+        .first()
     )
 
-    # ✅ 추가: DB 저장
+    if existing_todo:
+        raise HTTPException(
+            status_code=400,
+            detail="같은 제목의 할 일이 이미 존재합니다."
+        )
+
+    new_todo = TodoDB(
+        title=todo_data.title,
+        done=todo_data.done,
+        user_id=current_user.id
+    )
+
     db.add(new_todo)
     db.commit()
     db.refresh(new_todo)
 
+    # =====================================================
+    # [추가] 응답 후 실행할 작업 등록
+    # - add_task()에 넣으면 사용자 응답이 끝난 뒤 실행됩니다.
+    # =====================================================
+    background_tasks.add_task(
+        write_todo_log,
+        "CREATE",
+        current_user.username,
+        new_todo.title
+    )
+
+    # background_tasks.add_task(
+    #     fake_send_notification,
+    #     current_user.username,
+    #     f"'{new_todo.title}' Todo가 생성되었습니다."
+    # )
+
     return new_todo
 
 
-
-
-@router.put("/todos/{todo_id}", response_model=Todo,
-    status_code=status.HTTP_200_OK,  # ✅ 추가: 상태 코드 명시
-    responses={                      # ✅ 추가: Swagger에 예외 응답 문서화
-        200: {"description": "Todo 수정 성공"},
-        400: {"description": "수정할 데이터가 없거나 잘못된 요청"},
-        404: {"description": "수정할 Todo를 찾을 수 없음"}
-    }
-
-)
+# =========================================================
+# 내 Todo 수정
+# - [추가] 수정 후 로그 저장
+# =========================================================
+@router.put("/{todo_id}", response_model=Todo)
 def update_todo(
     todo_id: int,
     todo_data: TodoUpdate,
-    db: Session = Depends(get_db)   # ✅ 추가
+    background_tasks: BackgroundTasks,  # [추가]
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
 ):
-    # 수정 데이터 확인
     update_data = todo_data.model_dump(exclude_unset=True)
+
     if not update_data:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=400,
             detail="수정할 데이터를 하나 이상 보내주세요."
         )
 
-    # ✅ 추가: DB에서 대상 찾기
-    todo = db.query(TodoDB).filter(TodoDB.id == todo_id).first()
-    if not todo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="수정할 할 일이 없습니다."
-        )
+    todo = (
+        db.query(TodoDB)
+        .filter(TodoDB.id == todo_id, TodoDB.user_id == current_user.id)
+        .first()
+    )
 
-    # ✅ 추가: title 중복 검사
+    if not todo:
+        raise HTTPException(status_code=404, detail="수정할 할 일이 없습니다.")
+
     if "title" in update_data:
         duplicate_todo = (
             db.query(TodoDB)
-            .filter(TodoDB.title == update_data["title"], TodoDB.id != todo_id)
+            .filter(
+                TodoDB.title == update_data["title"],
+                TodoDB.user_id == current_user.id,
+                TodoDB.id != todo_id
+            )
             .first()
         )
         if duplicate_todo:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=400,
                 detail="같은 제목의 다른 할 일이 이미 존재합니다."
             )
 
-    # ✅ 추가: 값 반영
     for key, value in update_data.items():
         setattr(todo, key, value)
 
     db.commit()
     db.refresh(todo)
 
+    # [추가] 수정 로그 백그라운드 저장
+    # background_tasks.add_task(
+    #     write_todo_log,
+    #     "UPDATE",
+    #     current_user.username,
+    #     todo.title
+    # )
+
     return todo
 
 
+# =========================================================
+# 내 Todo 삭제
+# - [추가] 삭제 후 로그 저장
+# =========================================================
+@router.delete("/{todo_id}", status_code=200)
+def delete_todo(
+    todo_id: int,
+    background_tasks: BackgroundTasks,  # [추가]
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    todo = (
+        db.query(TodoDB)
+        .filter(TodoDB.id == todo_id, TodoDB.user_id == current_user.id)
+        .first()
+    )
 
+    if not todo:
+        raise HTTPException(status_code=404, detail="삭제할 할 일이 없습니다.")
 
-@router.delete("/todos/{todo_id}",
-    status_code=status.HTTP_200_OK,  # ✅ 추가: 상태 코드 명시
-    responses={                      # ✅ 추가: Swagger에 예외 응답 문서화
-        200: {"description": "Todo 삭제 성공"},
-        404: {"description": "삭제할 Todo를 찾을 수 없음"}
+    deleted_title = todo.title
+
+    deleted_data = {
+        "id": todo.id,
+        "title": todo.title,
+        "done": todo.done,
+        "user_id": todo.user_id
     }
 
-)
-def delete_todo(todo_id: int):
-    for index, todo in enumerate(todos):
-        if todo.id == todo_id:
-            deleted_todo = todos.pop(index)
-            return {"message": "삭제 완료", "deleted": deleted_todo}
+    db.delete(todo)
+    db.commit()
 
-    raise HTTPException(status_code=404, detail="삭제할 할 일이 없습니다.")
+    # [추가] 삭제 로그 백그라운드 저장
+    # background_tasks.add_task(
+    #     write_todo_log,
+    #     "DELETE",
+    #     current_user.username,
+    #     deleted_title
+    # )
 
-
+    return {
+        "message": "삭제 완료",
+        "deleted": deleted_data
+    }
 
 
 
