@@ -11,3 +11,8 @@
 [2026-03-19 12:58:44] user=홍길자 | action=DELETE | title=string
 [2026-03-19 12:58:57] user=홍길자 | action=CREATE | title=라이딩
 [2026-03-19 12:59:28] user=홍길자 | action=UPDATE | title=달리기
+[2026-03-20 11:16:03] user=홍길자 | action=CREATE | title=러닝
+[2026-03-20 11:16:29] user=홍길자 | action=CREATE | title=라이딩
+[2026-03-20 11:17:59] user=홍길자 | action=UPDATE | title=러닝
+[2026-03-20 11:18:00] user=홍길자 | action=UPDATE | title=러닝
+[2026-03-20 11:21:43] user=박말자 | action=CREATE | title=세일링

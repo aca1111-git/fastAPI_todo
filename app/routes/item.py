@@ -1,10 +1,14 @@
-from fastapi import APIRouter, HTTPException, status, Query, Depends, BackgroundTasks
+from fastapi import (
+    APIRouter, HTTPException, status, Query,
+    Depends, BackgroundTasks,
+    UploadFile, File, Form )
+
 from typing import Optional
 from fastapi import Header, Cookie, Response
 from sqlalchemy.orm import Session
 import asyncio  # [추가] async / await 연습용
 # from app.models.item import Todo, TodoCreate, TodoUpdate
-from app.schemas.todo import Todo, TodoCreate, TodoUpdate
+from app.schemas.todo import Todo
 from app.models.todo import TodoDB
 from app.models.user import UserDB
 
@@ -14,6 +18,8 @@ from app.db.session import get_db
 from app.routes.user import get_current_user
 
 from app.tasks.todo_tasks import write_todo_log, fake_send_notification
+# ✅ 추가: 파일 저장 유틸 import
+from app.utils.file_handler import save_uploaded_image, delete_uploaded_file
 
 
 
@@ -100,15 +106,19 @@ def get_todo(
 # =========================================================
 @router.post("", response_model=Todo, status_code=201)
 def create_todo(
-    todo_data: TodoCreate,
+    # todo_data: TodoCreate,
     background_tasks: BackgroundTasks,  # [추가] 백그라운드 작업 객체
+    title: str = Form(...), 
+    done: bool = Form(False), 
+    image: UploadFile | None = File(None),
+
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
     existing_todo = (
         db.query(TodoDB)
         .filter(
-            TodoDB.title == todo_data.title,
+            TodoDB.title == title,
             TodoDB.user_id == current_user.id
         )
         .first()
@@ -120,10 +130,20 @@ def create_todo(
             detail="같은 제목의 할 일이 이미 존재합니다."
         )
 
+
+    image_path = None
+
+    # ✅ 추가: 이미지가 있으면 저장
+    if image is not None and image.filename:
+        image_path = save_uploaded_image(image)
+
+
+
     new_todo = TodoDB(
-        title=todo_data.title,
-        done=todo_data.done,
-        user_id=current_user.id
+        title=title,
+        done=done,
+        user_id=current_user.id,
+        image_path=image_path
     )
 
     db.add(new_todo)
@@ -141,11 +161,11 @@ def create_todo(
         new_todo.title
     )
 
-    # background_tasks.add_task(
-    #     fake_send_notification,
-    #     current_user.username,
-    #     f"'{new_todo.title}' Todo가 생성되었습니다."
-    # )
+    background_tasks.add_task(
+        fake_send_notification,
+        current_user.username,
+        f"'{new_todo.title}' Todo가 생성되었습니다."
+    )
 
     return new_todo
 
@@ -157,18 +177,16 @@ def create_todo(
 @router.put("/{todo_id}", response_model=Todo)
 def update_todo(
     todo_id: int,
-    todo_data: TodoUpdate,
+    # todo_data: TodoUpdate,
     background_tasks: BackgroundTasks,  # [추가]
+    title: Optional[str] = Form(None),                # ✅ 수정
+    done: Optional[bool] = Form(None),                # ✅ 수정
+    image: UploadFile | None = File(None),
+
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
-    update_data = todo_data.model_dump(exclude_unset=True)
-
-    if not update_data:
-        raise HTTPException(
-            status_code=400,
-            detail="수정할 데이터를 하나 이상 보내주세요."
-        )
+    # update_data = todo_data.model_dump(exclude_unset=True)
 
     todo = (
         db.query(TodoDB)
@@ -177,9 +195,14 @@ def update_todo(
     )
 
     if not todo:
-        raise HTTPException(status_code=404, detail="수정할 할 일이 없습니다.")
+        raise HTTPException(
+            status_code=400,
+            detail="수정할 데이터를 하나 이상 보내주세요."
+        )
 
-    if "title" in update_data:
+    
+    # ✅ 추가: 제목 중복 검사
+    if title is not None:
         duplicate_todo = (
             db.query(TodoDB)
             .filter(
@@ -194,32 +217,87 @@ def update_todo(
                 status_code=400,
                 detail="같은 제목의 다른 할 일이 이미 존재합니다."
             )
+        todo.title = title
 
-    for key, value in update_data.items():
-        setattr(todo, key, value)
+
+    # ✅ 추가: done 수정
+    if done is not None:
+        todo.done = done
+
+    # ✅ 추가: 새 이미지 업로드 시 기존 파일 삭제 후 교체
+    if image is not None and image.filename:
+        delete_uploaded_file(todo.image_path)
+        todo.image_path = save_uploaded_image(image)    
+
 
     db.commit()
     db.refresh(todo)
 
     # [추가] 수정 로그 백그라운드 저장
-    # background_tasks.add_task(
-    #     write_todo_log,
-    #     "UPDATE",
-    #     current_user.username,
-    #     todo.title
-    # )
+    background_tasks.add_task(
+        write_todo_log,
+        "UPDATE",
+        current_user.username,
+        todo.title
+    )
 
     return todo
 
 
 # =========================================================
-# 내 Todo 삭제
+# 내 Todo 이미지 삭제 API
 # - [추가] 삭제 후 로그 저장
+# =========================================================
+@router.delete("/{todo_id}/image", status_code=200)
+def delete_todo_image(
+    todo_id: int,
+    background_tasks: BackgroundTasks,  # [추가]
+    db: Session = Depends(get_db),
+    current_user: UserDB = Depends(get_current_user),
+):
+    todo = (
+        db.query(TodoDB)
+        .filter(TodoDB.id == todo_id, TodoDB.user_id == current_user.id)
+        .first()
+    )
+
+    if not todo:
+        raise HTTPException(status_code=404, detail="삭제할 할 일이 없습니다.")
+
+    if not todo.image_path:
+        raise HTTPException(status_code=400, detail="삭제할 이미지가 없습니다.")
+
+
+    delete_uploaded_file(todo.image_path)
+    todo.image_path = None
+
+    db.commit()
+    db.refresh(todo)
+
+
+    # [추가] 삭제 로그 백그라운드 저장
+    background_tasks.add_task(
+        write_todo_log,
+        "DELETE",
+        current_user.username,
+        todo.title
+    )
+
+    return {
+        "message": "이미지 삭제 완료",
+        "todo_id": todo.id
+    }
+
+
+
+# =========================================================
+# 내 Todo 삭제
+# - ✅ 수정: Todo 삭제 시 연결된 이미지 파일도 함께 삭제
 # =========================================================
 @router.delete("/{todo_id}", status_code=200)
 def delete_todo(
     todo_id: int,
-    background_tasks: BackgroundTasks,  # [추가]
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
@@ -238,19 +316,22 @@ def delete_todo(
         "id": todo.id,
         "title": todo.title,
         "done": todo.done,
-        "user_id": todo.user_id
+        "user_id": todo.user_id,
+        "image_path": todo.image_path  # ✅ 추가
     }
+
+    # ✅ 추가: 연결된 이미지 파일 삭제
+    delete_uploaded_file(todo.image_path)
 
     db.delete(todo)
     db.commit()
 
-    # [추가] 삭제 로그 백그라운드 저장
-    # background_tasks.add_task(
-    #     write_todo_log,
-    #     "DELETE",
-    #     current_user.username,
-    #     deleted_title
-    # )
+    background_tasks.add_task(
+        write_todo_log,
+        "DELETE",
+        current_user.username,
+        deleted_title
+    )
 
     return {
         "message": "삭제 완료",

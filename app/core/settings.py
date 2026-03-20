@@ -1,8 +1,13 @@
+import os
+
 class Settings:
     PROJECT_NAME: str = "FastAPI Todo API"
-    VERSION: str = "2.2.0"
+    VERSION: str = "3.0.0"
     DATABASE_URL: str = "sqlite:///./todo.db"
     ALLOWED_ORIGINS: list[str] = ["*"]
+
+    MEDIA_ROOT: str = "media"
+    TODO_UPLOAD_DIR: str = os.path.join("media", "todos")
 
     SECRET_KEY: str = "my-super-secret-key"
     ALGORITHM: str = "HS256"

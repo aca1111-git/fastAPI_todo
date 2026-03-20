@@ -10,6 +10,8 @@ class TodoDB(Base):
     done = Column(Boolean, default=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
+    image_path = Column(String(255), nullable=True)
+
 
 
 # class UserDB(Base):

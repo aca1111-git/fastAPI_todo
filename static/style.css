@@ -24,31 +24,26 @@ h1 {
     color: #1e293b;
 }
 
-.todo-input-box,
-.search-filter-box {
+.todo-input-box {
     display: flex;
     gap: 10px;
     margin-bottom: 20px;
+    align-items: center;
     flex-wrap: wrap;
 }
 
-.todo-input-box input,
-.search-filter-box input,
-.search-filter-box select {
+.todo-input-box input[type="text"] {
     flex: 1;
-    min-width: 140px;
     padding: 14px;
     font-size: 16px;
     border: 2px solid #dbeafe;
     border-radius: 10px;
     outline: none;
-    box-sizing: border-box;
 }
 
-.todo-input-box input:focus,
-.search-filter-box input:focus,
-.search-filter-box select:focus {
-    border-color: #3b82f6;
+.todo-input-box input[type="file"] {
+    padding: 8px;
+    font-size: 14px;
 }
 
 .todo-input-box button,
@@ -111,6 +106,14 @@ h1 {
     align-items: center;
     gap: 12px;
     flex: 1;
+}
+
+.todo-thumb {
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
 }
 
 .todo-text {
